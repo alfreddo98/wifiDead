@@ -99,7 +99,7 @@ function startAtack(){
 	kill -9 $airodump_filter_PID
 	wait $airodump_filter_PID 2>/dev/null
 # Ahora romperemos la contraseña usando la captura que se ha captura. Se usará aircrack:
-	xterm -hold -e "aircrack-g" -w $diccionario Captura-01.cap" &
+	xterm -hold -e "aircrack-ng -w $diccionario Captura-01.cap" &
 }
 # Función helpPanel para monstrar el panel de ayuda:
 function helpPanel(){
